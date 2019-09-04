@@ -1,3 +1,4 @@
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -11,10 +12,13 @@ import java.util.Locale;
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.api.client.http.AbstractInputStreamContent;
 import com.google.api.client.http.FileContent;
+import com.google.api.client.http.HttpRequest;
+import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.services.androidpublisher.AndroidPublisher;
 import com.google.api.services.androidpublisher.AndroidPublisherScopes;
 import com.google.api.services.androidpublisher.model.Apk;
 import com.google.api.services.androidpublisher.model.AppEdit;
+import com.google.api.services.androidpublisher.model.Bundle;
 import com.google.api.services.androidpublisher.model.LocalizedText;
 import com.google.api.services.androidpublisher.model.Track;
 import com.google.api.services.androidpublisher.model.TrackRelease;
@@ -32,15 +36,22 @@ import net.dongliu.apk.parser.bean.ApkMeta;
  */
 public class App {
     private static final String MIME_TYPE_APK = "application/vnd.android.package-archive";
+    private static final String MIME_TYPE_AAB = "application/octet-stream";
 
     @Option(name = "-key", required = true, usage = "JSON key file of authorized service account")
     private String jsonKeyPath;
 
-    @Option(name = "-name", usage = "(optional) App name on Play Store (defaults to name in apk)")
+    @Option(name = "-name", usage = " App name on Play Store")
     private String appName;
 
-    @Option(name = "-apk", required = true, usage = "The apk file to upload")
+    @Option(name = "-packageName", required = true, usage = "Unique identifier to your app, usually follows the pattern: com.example.example")
+    private String packageName;
+
+    @Option(name = "-apk", usage = "The apk file to upload")
     private String apkPath;
+
+    @Option(name = "-aab", usage = "The aab file to upload")
+    private String aabPath;
 
     @Option(name = "-track", required = true, usage = "Release track to use. Eg. alpha, beta, production etc")
     private String trackName;
@@ -122,7 +133,7 @@ public class App {
     }
 
     private AndroidPublisher publisher;
-    private String editId = null;
+    private String editId;
 
     /**
      * Perform apk upload an release on given track
@@ -154,6 +165,8 @@ public class App {
             throw new IOException(msg, e);
         }
     }
+
+    public void handleApkUpload() throws IOException {
         // load key file credentials
         GoogleCredential cred = this.loadCredintials();
 
@@ -162,6 +175,8 @@ public class App {
         File apkFile = FileSystems.getDefault().getPath(this.apkPath).normalize().toFile();
         ApkFile apkInfo = new ApkFile(apkFile);
         ApkMeta apkMeta = apkInfo.getApkMeta();
+        packageName = apkMeta.getPackageName();
+        appName = apkMeta.getName();
         System.out.println(String.format("App Name: %s", apkMeta.getName()));
         System.out.println(String.format("App Id: %s", apkMeta.getPackageName()));
         System.out.println(String.format("App Version Code: %d", apkMeta.getVersionCode()));
@@ -187,6 +202,62 @@ public class App {
         this.commitEdit();
 
     }
+
+    public void handleAabUpload() throws IOException {
+        if (this.aabPath == null)
+            throw new IllegalArgumentException("either apk path or aab path must be specified");
+
+        // load key file credentials
+        GoogleCredential cred = this.loadCredintials();
+
+        File aabFile = FileSystems.getDefault().getPath(this.aabPath).normalize().toFile();
+
+        // load release notes
+        List<LocalizedText> releaseNotes = this.loadReleaseNotes();
+
+        // init publisher
+        publisher = this.initPublisher(cred);
+
+        // create an edit
+        editId = this.createEdit();
+
+        // upload the aab
+        Bundle aab = this.uploadAab(aabFile);
+
+        // create a release on track
+        this.createReleaseTrack(releaseNotes, aab);
+
+        // commit edit
+        this.commitEdit();
+
+    }
+
+    public GoogleCredential loadCredintials() throws IOException {
+        System.out.println("Loading account credentials...");
+        Path jsonKey = FileSystems.getDefault().getPath(this.jsonKeyPath).normalize();
+        GoogleCredential cred = GoogleCredential.fromStream(new FileInputStream(jsonKey.toFile()));
+        return cred.createScoped(Collections.singleton(AndroidPublisherScopes.ANDROIDPUBLISHER));
+    }
+
+    public AndroidPublisher initPublisher(GoogleCredential cred) {
+        System.out.println("Initialising publisher service...");
+        AndroidPublisher ab = new AndroidPublisher.Builder(cred.getTransport(), cred.getJsonFactory(),
+                this.setHttpTimeout(cred)).setApplicationName(this.appName).build();
+        return ab;
+    }
+
+    private HttpRequestInitializer setHttpTimeout(final HttpRequestInitializer requestInitializer) {
+        return new HttpRequestInitializer() {
+            @Override
+            public void initialize(HttpRequest httpRequest) throws IOException {
+                requestInitializer.initialize(httpRequest);
+                httpRequest.setConnectTimeout(3 * 60000); // 3 minutes connect timeout
+                httpRequest.setReadTimeout(3 * 60000); // 3 minutes read timeout
+            }
+        };
+    }
+
+    public List<LocalizedText> loadReleaseNotes() throws IOException {
         System.out.println("Loading release notes...");
         List<LocalizedText> releaseNotes = new ArrayList<LocalizedText>();
         if (this.notesPath != null) {
@@ -208,25 +279,42 @@ public class App {
     }
 
     public Apk uploadApk(File apkFile) throws IOException {
-            System.out.println("Uploading apk file...");
+        System.out.println("Uploading apk file...");
         AbstractInputStreamContent apkContent = new FileContent(MIME_TYPE_APK, apkFile);
-            Apk apk = publisher.edits().apks().upload(packageName, editId, apkContent).execute();
-            System.out.println(String.format("Apk uploaded. Version Code: %s", apk.getVersionCode()));
+        Apk apk = publisher.edits().apks().upload(packageName, editId, apkContent).execute();
+        System.out.println(String.format("Apk uploaded. Version Code: %s", apk.getVersionCode()));
         return apk;
     }
 
-            // create a release on track
-            System.out.println(String.format("On track:%s. Creating a release...", this.trackName));
-            TrackRelease release = new TrackRelease().setName("Automated upload").setStatus("completed")
-                    .setVersionCodes(Collections.singletonList((long) apk.getVersionCode()))
-                    .setReleaseNotes(releaseNotes);
-            Track track = new Track().setReleases(Collections.singletonList(release));
-            track = publisher.edits().tracks().update(packageName, editId, this.trackName, track).execute();
-            System.out.println(String.format("Release created on track: %s", this.trackName));
+    public Bundle uploadAab(File aabFile) throws IOException {
+        System.out.println("Uploading aab file...");
+        AbstractInputStreamContent aabContent = new FileContent(MIME_TYPE_AAB, aabFile);
+        Bundle aab = publisher.edits().bundles().upload(packageName, editId, aabContent).execute();
+        System.out.println(String.format("Aab uploaded. Version Code: %s", aab.getVersionCode()));
+        return aab;
+    }
+
+    public void createReleaseTrack(List<LocalizedText> releaseNotes, Apk apk) throws IOException {
+        System.out.println(String.format("On track:%s. Creating a release...", this.trackName));
+        TrackRelease release = new TrackRelease().setName("Automated upload").setStatus("completed")
+                .setVersionCodes(Collections.singletonList((long) apk.getVersionCode())).setReleaseNotes(releaseNotes);
+        Track track = new Track().setReleases(Collections.singletonList(release));
+        track = publisher.edits().tracks().update(packageName, editId, this.trackName, track).execute();
+        System.out.println(String.format("Release created on track: %s", this.trackName));
+    }
+
+    public void createReleaseTrack(List<LocalizedText> releaseNotes, Bundle aab) throws IOException {
+        System.out.println(String.format("On track:%s. Creating a release...", this.trackName));
+        TrackRelease release = new TrackRelease().setName("Automated upload").setStatus("completed")
+                .setVersionCodes(Collections.singletonList((long) aab.getVersionCode())).setReleaseNotes(releaseNotes);
+        Track track = new Track().setReleases(Collections.singletonList(release));
+        track = publisher.edits().tracks().update(packageName, editId, this.trackName, track).execute();
+        System.out.println(String.format("Release created on track: %s", this.trackName));
+    }
 
     public void commitEdit() throws IOException {
-            System.out.println("Commiting edit...");
+        System.out.println("Commiting edit...");
         publisher.edits().commit(packageName, editId).execute();
-            System.out.println(String.format("Success. Commited Edit id: %s", editId));
+        System.out.println(String.format("Success. Commited Edit id: %s", editId));
     }
 }
