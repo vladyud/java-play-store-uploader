@@ -121,76 +121,22 @@ public class App {
         return this;
     }
 
+    private AndroidPublisher publisher;
+    private String editId = null;
+
     /**
      * Perform apk upload an release on given track
      * 
      * @throws Exception Upload error
      */
     private void upload() throws Exception {
-
-        // load key file credentials
-        System.out.println("Loading account credentials...");
-        Path jsonKey = FileSystems.getDefault().getPath(this.jsonKeyPath).normalize();
-        GoogleCredential cred = GoogleCredential.fromStream(new FileInputStream(jsonKey.toFile()));
-        cred = cred.createScoped(Collections.singleton(AndroidPublisherScopes.ANDROIDPUBLISHER));
-
-        // load apk file info
-        System.out.println("Loading apk file information...");
-        Path apkFile = FileSystems.getDefault().getPath(this.apkPath).normalize();
-        ApkFile apkInfo = new ApkFile(apkFile.toFile());
-        ApkMeta apkMeta = apkInfo.getApkMeta();
-        final String applicationName = this.appName == null ? apkMeta.getName() : this.appName;
-        final String packageName = apkMeta.getPackageName();
-        System.out.println(String.format("App Name: %s", apkMeta.getName()));
-        System.out.println(String.format("App Id: %s", apkMeta.getPackageName()));
-        System.out.println(String.format("App Version Code: %d", apkMeta.getVersionCode()));
-        System.out.println(String.format("App Version Name: %s", apkMeta.getVersionName()));
-        apkInfo.close();
-
-        // load release notes
-        System.out.println("Loading release notes...");
-        List<LocalizedText> releaseNotes = new ArrayList<LocalizedText>();
-        if (this.notesPath != null) {
-            Path notesFile = FileSystems.getDefault().getPath(this.notesPath).normalize();
-            String notesContent = new String(Files.readAllBytes(notesFile));
-            releaseNotes.add(new LocalizedText().setLanguage(Locale.US.toString()).setText(notesContent));
-        } else if (this.notes != null) {
-            releaseNotes.add(new LocalizedText().setLanguage(Locale.US.toString()).setText(this.notes));
-        }
-
-        // init publisher
-        System.out.println("Initialising publisher service...");
-        AndroidPublisher.Builder ab = new AndroidPublisher.Builder(cred.getTransport(), cred.getJsonFactory(), cred);
-        AndroidPublisher publisher = ab.setApplicationName(applicationName).build();
-
-        // create an edit
-        System.out.println("Initialising new edit...");
-        AppEdit edit = publisher.edits().insert(packageName, null).execute();
-        final String editId = edit.getId();
-        System.out.println(String.format("Edit created. Id: %s", editId));
-
         try {
-            // upload the apk
-            System.out.println("Uploading apk file...");
-            AbstractInputStreamContent apkContent = new FileContent(MIME_TYPE_APK, apkFile.toFile());
-            Apk apk = publisher.edits().apks().upload(packageName, editId, apkContent).execute();
-            System.out.println(String.format("Apk uploaded. Version Code: %s", apk.getVersionCode()));
+            if (this.apkPath != null) {
+                handleApkUpload();
+            } else {
+                handleAabUpload();
+            }
 
-            // create a release on track
-            System.out.println(String.format("On track:%s. Creating a release...", this.trackName));
-            TrackRelease release = new TrackRelease().setName("Automated upload").setStatus("completed")
-                    .setVersionCodes(Collections.singletonList((long) apk.getVersionCode()))
-                    .setReleaseNotes(releaseNotes);
-            Track track = new Track().setReleases(Collections.singletonList(release));
-            track = publisher.edits().tracks().update(packageName, editId, this.trackName, track).execute();
-            System.out.println(String.format("Release created on track: %s", this.trackName));
-
-            // commit edit
-            System.out.println("Commiting edit...");
-            edit = publisher.edits().commit(packageName, editId).execute();
-            System.out.println(String.format("Success. Commited Edit id: %s", editId));
-
-            // Success
         } catch (Exception e) {
             // error message
             String msg = "Operation Failed: " + e.getMessage();
@@ -207,5 +153,80 @@ public class App {
             // forward error with message
             throw new IOException(msg, e);
         }
+    }
+        // load key file credentials
+        GoogleCredential cred = this.loadCredintials();
+
+        // load apk file info
+        System.out.println("Loading apk file information...");
+        File apkFile = FileSystems.getDefault().getPath(this.apkPath).normalize().toFile();
+        ApkFile apkInfo = new ApkFile(apkFile);
+        ApkMeta apkMeta = apkInfo.getApkMeta();
+        System.out.println(String.format("App Name: %s", apkMeta.getName()));
+        System.out.println(String.format("App Id: %s", apkMeta.getPackageName()));
+        System.out.println(String.format("App Version Code: %d", apkMeta.getVersionCode()));
+        System.out.println(String.format("App Version Name: %s", apkMeta.getVersionName()));
+        apkInfo.close();
+
+        // load release notes
+        List<LocalizedText> releaseNotes = this.loadReleaseNotes();
+
+        // init publisher
+        publisher = this.initPublisher(cred);
+
+        // create an edit
+        editId = this.createEdit();
+
+        // upload the apk
+        Apk apk = this.uploadApk(apkFile);
+
+        // create a release on track
+        this.createReleaseTrack(releaseNotes, apk);
+
+        // commit edit
+        this.commitEdit();
+
+    }
+        System.out.println("Loading release notes...");
+        List<LocalizedText> releaseNotes = new ArrayList<LocalizedText>();
+        if (this.notesPath != null) {
+            Path notesFile = FileSystems.getDefault().getPath(this.notesPath).normalize();
+            String notesContent = new String(Files.readAllBytes(notesFile));
+            releaseNotes.add(new LocalizedText().setLanguage(Locale.US.toString()).setText(notesContent));
+        } else if (this.notes != null) {
+            releaseNotes.add(new LocalizedText().setLanguage(Locale.US.toString()).setText(this.notes));
+        }
+        return releaseNotes;
+    }
+
+    public String createEdit() throws IOException {
+        System.out.println("Initialising new edit...");
+        AppEdit edit = publisher.edits().insert(packageName, null).execute();
+        final String editId = edit.getId();
+        System.out.println(String.format("Edit created. Id: %s", editId));
+        return editId;
+    }
+
+    public Apk uploadApk(File apkFile) throws IOException {
+            System.out.println("Uploading apk file...");
+        AbstractInputStreamContent apkContent = new FileContent(MIME_TYPE_APK, apkFile);
+            Apk apk = publisher.edits().apks().upload(packageName, editId, apkContent).execute();
+            System.out.println(String.format("Apk uploaded. Version Code: %s", apk.getVersionCode()));
+        return apk;
+    }
+
+            // create a release on track
+            System.out.println(String.format("On track:%s. Creating a release...", this.trackName));
+            TrackRelease release = new TrackRelease().setName("Automated upload").setStatus("completed")
+                    .setVersionCodes(Collections.singletonList((long) apk.getVersionCode()))
+                    .setReleaseNotes(releaseNotes);
+            Track track = new Track().setReleases(Collections.singletonList(release));
+            track = publisher.edits().tracks().update(packageName, editId, this.trackName, track).execute();
+            System.out.println(String.format("Release created on track: %s", this.trackName));
+
+    public void commitEdit() throws IOException {
+            System.out.println("Commiting edit...");
+        publisher.edits().commit(packageName, editId).execute();
+            System.out.println(String.format("Success. Commited Edit id: %s", editId));
     }
 }
