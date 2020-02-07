@@ -52,6 +52,7 @@ Running without any arguments will print available argument options.
 ```bash
 Options:
  -apk VAL       : The apk file to upload
+ -aab VAL       : The aab file to upload
  -key VAL       : JSON key file of authorized service account
  -name VAL      : (optional) App name on Play Store (defaults to name in apk)
  -notes VAL     : (optional) Release notes
