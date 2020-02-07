@@ -55,6 +55,7 @@ Options:
  -aab VAL       : The aab file to upload
  -key VAL       : JSON key file of authorized service account
  -name VAL      : (optional) App name on Play Store (defaults to name in apk)
+ -packageName VAL   : (optional) package name for aab file
  -notes VAL     : (optional) Release notes
  -notesFile VAL : (optional) Release notes from file
  -track VAL     : Release track to use. Eg. alpha, beta, production etc
