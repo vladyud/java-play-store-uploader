@@ -26,9 +26,9 @@ repositories {
  * Dependencies
  */
 dependencies {
-    compile group: 'com.google.apis', name: 'google-api-services-androidpublisher', version: 'v3-rev103-1.25.0'
+    compile group: 'com.google.apis', name: 'google-api-services-androidpublisher', version: 'v3-rev130-1.25.0'
     compile 'args4j:args4j:2.33'
-    compile 'net.dongliu:apk-parser:2.6.9'
+    compile 'net.dongliu:apk-parser:2.6.10'
 }
 
 
